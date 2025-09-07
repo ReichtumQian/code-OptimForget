@@ -23,7 +23,7 @@ class OptimControlProblem:
                  running_cost: Callable[[float, torch.Tensor, torch.Tensor],
                                         torch.Tensor],
                  terminal_cost: Callable[[float, torch.Tensor], torch.Tensor],
-                 x0: torch.Tensor, t0: float, tf: float):
+                 x0: torch.Tensor, t0: float, tf: float, control_dim: int):
         """
         Initializes the Optimal Control Problem.
 
@@ -39,6 +39,7 @@ class OptimControlProblem:
             x0 (torch.Tensor): The initial state. Shape: (N, state_dim).
             t0 (float): The initial time.
             tf (float): The final time.
+            control_dim (int): The dimension of the control input.
         """
         self.f = f
         self.running_cost = running_cost
@@ -53,6 +54,7 @@ class OptimControlProblem:
             self.x0 = self.x0.unsqueeze(0)
 
         self.batch_size, self.state_dim = self.x0.shape
+        self.control_dim = control_dim
 
     def evaluate_cost(self, t_arr: torch.Tensor, x_traj: torch.Tensor,
                       u_traj: torch.Tensor) -> float:
@@ -96,8 +98,10 @@ class PMPProblem(OptimControlProblem):
     PMP introduces the costate (or adjoint state) 'p' and the Hamiltonian.
     """
 
-    def __init__(self, f, running_cost, terminal_cost, x0, t0, tf):
-        super().__init__(f, running_cost, terminal_cost, x0, t0, tf)
+    def __init__(self, f, running_cost, terminal_cost, x0, t0, tf,
+                 control_dim):
+        super().__init__(f, running_cost, terminal_cost, x0, t0, tf,
+                         control_dim)
 
     def hamiltonian(self, t: float, x: torch.Tensor, p: torch.Tensor,
                     u: torch.Tensor) -> torch.Tensor:
@@ -193,13 +197,11 @@ class FineTuneForgetProblem(PMPProblem):
         self._terminal_batch = [
             t.to(self.device) for t in self._terminal_batch
         ]
+        control_dim = self.state_dim
 
         # Initialize the parent PMPProblem
         super().__init__(self._f_dynamics, self._running_cost,
-                         self._terminal_cost, x0, t0, tf)
-
-        # Control dimension is the same as state dimension
-        self.control_dim = self.state_dim
+                         self._terminal_cost, x0, t0, tf, control_dim)
 
     def _compute_loss_l2(self, x: torch.Tensor) -> torch.Tensor:
         vector_to_parameters(x, self.model.parameters())

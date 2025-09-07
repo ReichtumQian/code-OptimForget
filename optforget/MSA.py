@@ -216,16 +216,13 @@ class MSAOptimizer(Optimizer):
 
             # --- Initialize state (u_traj) on first step ---
             if 'u_traj' not in state:
-                pmp_class = group['pmp_problem_class']
-                problem_params = group['problem_params']
+                problem_for_init = group['pmp_problem_class'](
+                    x0=x0.data.detach().clone(), **group['problem_params'])
+                control_dim = problem_for_init.control_dim
                 msa_params = group['msa_solver_params']
 
                 num_steps = msa_params['num_steps']
 
-                # Determine control dimension. This is a bit of a hack.
-                # A better way would be to pass it explicitly.
-                # For many problems, control_dim == state_dim.
-                control_dim = x0.numel()
                 batch_size = 1  # Optimizer works on a single parameter vector
 
                 # Initial guess for control is zero
