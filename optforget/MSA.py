@@ -1,4 +1,4 @@
-from .OptControlProblem import PMPProblem
+from .OptControlProblem import PMPProblem, FineTuneForgetProblem
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -115,7 +115,7 @@ class MSASolver:
                                  device=x_traj.device)
         for k in range(self.num_steps - 1):
             u_new_traj[k] = self.problem.compute_optimal_control(
-                self.t_arr[k].item(), x_traj[k], p_traj[k])
+                self.t_arr[k].item(), x_traj[k], p_traj[k + 1])
 
         return u_new_traj
 
@@ -161,6 +161,69 @@ class MSASolver:
         return u_traj, x_optimal, costs
 
 
+class StochasticMSASolver(MSASolver):
+
+    def __init__(self, num_steps: int, num_iterations: int,
+                 problem: FineTuneForgetProblem):
+        if not hasattr(problem,
+                       'ft_dataloader') or problem.ft_dataloader is None:
+            raise TypeError(
+                "The provided problem for StochasticMSASolver must have an 'ft_dataloader' attribute."
+            )
+
+        super().__init__(num_steps, num_iterations, problem)
+
+        self.dataloader = problem.ft_dataloader
+        self.data_iter = iter(self.dataloader)
+        self.device = problem.x0.device
+
+    def _get_next_batch(self) -> tuple:
+        try:
+            batch = next(self.data_iter)
+        except StopIteration:
+            self.data_iter = iter(self.dataloader)
+            batch = next(self.data_iter)
+        return [t.to(self.device) for t in batch]
+
+    def _forward_pass(self, u_traj: torch.Tensor) -> torch.Tensor:
+        x_traj = torch.zeros_like(
+            self.problem.x0.expand(self.num_steps, -1, -1))
+        x_traj[0] = self.problem.x0
+
+        for k in range(self.num_steps - 1):
+            t_k, x_k, u_k = self.t_arr[k], x_traj[k], u_traj[k]
+
+            batch_k = self._get_next_batch()
+            self.problem.set_current_batch(batch_k)
+
+            dx_dt = self.problem.f(t_k.item(), x_k, u_k)
+            x_traj[k + 1] = x_k + self.dt * dx_dt
+
+        return x_traj
+
+    def _backward_pass(self, x_traj: torch.Tensor,
+                       u_traj: torch.Tensor) -> torch.Tensor:
+        p_traj = torch.zeros_like(x_traj)
+
+        terminal_batch = self._get_next_batch()
+        self.problem.set_current_batch(terminal_batch)
+        p_traj[-1] = self.problem.compute_terminal_costate(
+            self.problem.tf, x_traj[-1])
+
+        for k in range(self.num_steps - 2, -1, -1):
+            t_k, x_k, p_k_plus_1, u_k = self.t_arr[k], x_traj[k], p_traj[
+                k + 1], u_traj[k]
+
+            batch_k = self._get_next_batch()
+            self.problem.set_current_batch(batch_k)
+
+            dp_dt = self.problem.compute_costate_dynamics(
+                t_k.item(), x_k, p_k_plus_1, u_k)
+            p_traj[k] = p_k_plus_1 - self.dt * dp_dt
+
+        return p_traj
+
+
 class MSAOptimizer(Optimizer):
     """
     Implements MSA as a PyTorch Optimizer.
@@ -170,6 +233,7 @@ class MSAOptimizer(Optimizer):
     """
 
     def __init__(self, params, pmp_problem_class: Type[PMPProblem],
+                 solver_class: Type[MSASolver],
                  msa_solver_params: Dict[str, Any], problem_params: Dict[str,
                                                                          Any]):
         """
@@ -188,6 +252,7 @@ class MSAOptimizer(Optimizer):
             msa_solver_params['num_iterations'] = 1
 
         defaults = dict(pmp_problem_class=pmp_problem_class,
+                        solver_class=solver_class,
                         msa_solver_params=msa_solver_params,
                         problem_params=problem_params)
         super().__init__(params, defaults)
@@ -238,7 +303,9 @@ class MSAOptimizer(Optimizer):
             # Instantiate the problem and solver for the current step
             problem = group['pmp_problem_class'](x0=x0.data.detach().clone(),
                                                  **group['problem_params'])
-            solver = MSASolver(problem=problem, **group['msa_solver_params'])
+            solver_class = group['solver_class']
+            solver = solver_class(problem=problem,
+                                  **group['msa_solver_params'])
 
             # Run one iteration of MSA
             u_new, _, costs = solver.solve(u_current)

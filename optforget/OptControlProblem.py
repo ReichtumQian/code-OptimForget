@@ -193,20 +193,25 @@ class FineTuneForgetProblem(PMPProblem):
         self.loss_fn = loss_function
         x0 = parameters_to_vector(self.model.parameters()).detach()
         self.device = x0.device
-        self._terminal_batch = next(iter(self.ft_dataloader))
-        self._terminal_batch = [
-            t.to(self.device) for t in self._terminal_batch
-        ]
-        control_dim = self.state_dim
+        state_dim = x0.numel()
+        control_dim = state_dim
+        self._current_batch = None
 
         # Initialize the parent PMPProblem
         super().__init__(self._f_dynamics, self._running_cost,
                          self._terminal_cost, x0, t0, tf, control_dim)
 
+    def set_current_batch(self, batch: tuple):
+        self._current_batch = batch
+
     def _compute_loss_l2(self, x: torch.Tensor) -> torch.Tensor:
+        if self._current_batch is None:
+            raise ValueError(
+                "Current batch has not been set. Call set_current_batch() first."
+            )
         vector_to_parameters(x, self.model.parameters())
 
-        inputs, labels = self._terminal_batch
+        inputs, labels = self._current_batch
         predictions = self.model(inputs)
         loss = self.loss_fn(predictions, labels)
         return loss
