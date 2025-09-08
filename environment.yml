@@ -1,0 +1,35 @@
+name: optforget
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+
+  # --- PyTorch & CUDA ---
+  - pytorch::pytorch
+  - pytorch::torchvision
+  - pytorch::torchaudio
+  - pytorch::pytorch-cuda=11.8 # depend on your GPU version
+
+  # --- PyTorch Lightning ---
+  - conda-forge::pytorch-lightning
+  - conda-forge::torchmetrics
+  - conda-forge::tensorboard
+  
+  # --- Jupyter ---
+  - conda-forge::ipykernel
+  
+  # --- formatter ---
+  - conda-forge::yapf
+  
+  # --- pip ---
+  - pip
+  - pip:
+    - timm
+    - tqdm
+    - pathlib
+    - pandas
+    - seaborn
+    - matplotlib
