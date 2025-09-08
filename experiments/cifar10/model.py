@@ -1,3 +1,4 @@
+import torch
 import torch.nn as nn
 import torch.optim as optim
 import pytorch_lightning as pl
@@ -7,6 +8,8 @@ import torchvision
 import torchvision.transforms as transforms
 from torchmetrics import Accuracy
 import numpy as np
+from torch.nn.utils.convert_parameters import parameters_to_vector, vector_to_parameters
+from optforget import FineTuneForgetProblem, StochasticMSASolver, MSAOptimizer
 
 
 class CIFAR10DataModule(pl.LightningDataModule):
@@ -76,9 +79,11 @@ class CIFAR10DataModule(pl.LightningDataModule):
 class LitResNet(pl.LightningModule):
 
     def __init__(self,
+                 datamodule: pl.LightningDataModule,
                  num_classes=10,
                  learning_rate=1e-3,
-                 optimizer_name='SGD'):
+                 optimizer_name='SGD',
+                 **kwargs):
         super().__init__()
         self.save_hyperparameters()
 
@@ -95,6 +100,13 @@ class LitResNet(pl.LightningModule):
         self.criterion = nn.CrossEntropyLoss()
         self.accuracy_A = Accuracy(task='multiclass', num_classes=num_classes)
         self.accuracy_B = Accuracy(task='multiclass', num_classes=num_classes)
+        self.flat_params = torch.nn.Parameter(
+            parameters_to_vector(self.model.parameters()).detach())
+        self.datamodule = datamodule
+
+    def on_train_batch_start(self, batch, batch_idx):
+        """Hook to sync the model's parameters from our flattened vector."""
+        vector_to_parameters(self.flat_params, self.model.parameters())
 
     def forward(self, x):
         return self.model(x)
@@ -138,10 +150,46 @@ class LitResNet(pl.LightningModule):
                      add_dataloader_idx=False)
 
     def configure_optimizers(self):
-        if self.hparams.optimizer_name == 'AdamW':
-            return optim.AdamW(self.parameters(),
-                               lr=self.hparams.learning_rate,
-                               weight_decay=0.05)
-        return optim.SGD(self.parameters(),
-                         lr=self.hparams.learning_rate,
-                         momentum=0.9)
+        optimizer_name = self.hparams.optimizer_name
+
+        if optimizer_name == 'AdamW':
+            return torch.optim.AdamW(self.model.parameters(),
+                                     lr=self.hparams.learning_rate)
+
+        elif optimizer_name == 'SGD':
+            return torch.optim.SGD(self.model.parameters(),
+                                   lr=self.hparams.learning_rate)
+
+        elif optimizer_name == 'MSAOptimizer':
+            # 1. Define parameters for the PMP Problem
+            problem_params = {
+                'lambda_reg': self.hparams.lambda_reg,
+                'c_costs': (self.hparams.c1, self.hparams.c2),
+                'eta': self.hparams.eta,
+                'ft_dataloader': self.datamodule.train_dataloader(task='B'),
+                'model':
+                self.model,  # Pass the actual model for loss computation
+                'loss_function': self.criterion,
+                't0': self.hparams.t0,
+                'tf': self.hparams.tf,
+                'x_anchor': self.flat_params.detach().clone()
+            }
+
+            # 2. Define parameters for the MSA Solver
+            msa_solver_params = {
+                'num_steps': self.hparams.msa_num_steps,
+                'num_iterations': 1,
+            }
+
+            # 3. Instantiate the MSAOptimizer
+            # IMPORTANT: It optimizes the single flat_params tensor
+            optimizer = MSAOptimizer(
+                params=[self.flat_params
+                        ],  # Pass the single flattened parameter vector
+                pmp_problem_class=FineTuneForgetProblem,
+                solver_class=StochasticMSASolver,
+                msa_solver_params=msa_solver_params,
+                problem_params=problem_params)
+            return optimizer
+        else:
+            raise ValueError(f"Unsupported optimizer: {optimizer_name}")

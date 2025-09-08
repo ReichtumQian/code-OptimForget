@@ -170,7 +170,8 @@ class FineTuneForgetProblem(PMPProblem):
 
     def __init__(self, lambda_reg: float, c_costs: tuple, eta: float,
                  ft_dataloader: DataLoader, model: nn.Module,
-                 loss_function: Callable, t0: float, tf: float):
+                 loss_function: Callable, x_anchor: torch.Tensor, t0: float,
+                 tf: float):
         """
         Initializes the Fine-Tuning Forgetting Problem.
 
@@ -191,15 +192,20 @@ class FineTuneForgetProblem(PMPProblem):
         self.ft_dataloader = ft_dataloader
         self.model = model
         self.loss_fn = loss_function
-        x0 = parameters_to_vector(self.model.parameters()).detach()
-        self.device = x0.device
-        state_dim = x0.numel()
+        self.x_anchor = x_anchor.detach().clone()
+        self.device = self.x_anchor.device
+        state_dim = self.x_anchor.numel()
         control_dim = state_dim
         self._current_batch = None
+        self.param_names = [name for name, _ in self.model.named_parameters()]
+        self.param_shapes = [p.shape for _, p in self.model.named_parameters()]
+        self.param_numels = [
+            p.numel() for _, p in self.model.named_parameters()
+        ]
 
         # Initialize the parent PMPProblem
         super().__init__(self._f_dynamics, self._running_cost,
-                         self._terminal_cost, x0, t0, tf, control_dim)
+                         self._terminal_cost, x_anchor, t0, tf, control_dim)
 
     def set_current_batch(self, batch: tuple):
         self._current_batch = batch
@@ -209,10 +215,15 @@ class FineTuneForgetProblem(PMPProblem):
             raise ValueError(
                 "Current batch has not been set. Call set_current_batch() first."
             )
-        vector_to_parameters(x, self.model.parameters())
-
+        params_list = x.squeeze(0).split(self.param_numels)
+        param_dict = {
+            name: p.view(shape)
+            for name, p, shape in zip(self.param_names, params_list,
+                                      self.param_shapes)
+        }
         inputs, labels = self._current_batch
-        predictions = self.model(inputs)
+        predictions = torch.func.functional_call(self.model, param_dict,
+                                                 (inputs, ))
         loss = self.loss_fn(predictions, labels)
         return loss
 
@@ -231,8 +242,7 @@ class FineTuneForgetProblem(PMPProblem):
 
     def _terminal_cost(self, t: float, x: torch.Tensor) -> torch.Tensor:
         loss_l2 = self._compute_loss_l2(x)
-        x0 = self.x0
-        loss_l1 = 0.5 * torch.sum((x - x0) * (x - x0))
+        loss_l1 = 0.5 * torch.sum((x - self.x_anchor) * (x - self.x_anchor))
 
         return self.c1 * loss_l1 + self.c2 * loss_l2
 
@@ -241,12 +251,9 @@ class FineTuneForgetProblem(PMPProblem):
         """
         p(t_f) = d(phi)/dx |_{t_f, x_f}
         """
-        x_f.requires_grad_(True)
-        term_cost = self.terminal_cost(t_f, x_f)
-        if x_f.grad is not None:
-            x_f.grad.zero_()
-        p_f = torch.autograd.grad(term_cost, x_f)[0]
-        x_f.requires_grad_(False)
+        x_f_with_grad = x_f.detach().clone().requires_grad_(True)
+        term_cost = self.terminal_cost(t_f, x_f_with_grad)
+        p_f = torch.autograd.grad(term_cost, x_f_with_grad)[0]
         return p_f
 
     def compute_costate_dynamics(self, t: float, x: torch.Tensor,

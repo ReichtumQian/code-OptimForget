@@ -1,2 +1,2 @@
 from .OptControlProblem import FineTuneForgetProblem
-from .MSA import MSAOptimizer
+from .MSA import MSASolver, StochasticMSASolver, MSAOptimizer

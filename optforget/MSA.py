@@ -282,7 +282,7 @@ class MSAOptimizer(Optimizer):
             # --- Initialize state (u_traj) on first step ---
             if 'u_traj' not in state:
                 problem_for_init = group['pmp_problem_class'](
-                    x0=x0.data.detach().clone(), **group['problem_params'])
+                    **group['problem_params'])
                 control_dim = problem_for_init.control_dim
                 msa_params = group['msa_solver_params']
 
@@ -301,21 +301,20 @@ class MSAOptimizer(Optimizer):
             u_current = state['u_traj']
 
             # Instantiate the problem and solver for the current step
-            problem = group['pmp_problem_class'](x0=x0.data.detach().clone(),
-                                                 **group['problem_params'])
+            problem = group['pmp_problem_class'](**group['problem_params'])
+            problem.x0 = x0.data.detach().clone().unsqueeze(0)
             solver_class = group['solver_class']
             solver = solver_class(problem=problem,
                                   **group['msa_solver_params'])
 
             # Run one iteration of MSA
-            u_new, _, costs = solver.solve(u_current)
+            u_new, x_optimal, costs = solver.solve(u_current)
 
             # Store the updated control trajectory for the next step
             state['u_traj'] = u_new
 
-            # The "parameter" x0 itself is not updated by the optimizer step.
-            # The optimizer's job is to find the optimal control `u_traj` that
-            # steers the system from the *given* x0. The user would then
-            # need to extract the final state from a full forward pass.
+            with torch.no_grad():
+                final_state = x_optimal[-1]
+                x0.copy_(final_state.squeeze(0))
 
         return loss
