@@ -9,7 +9,7 @@ import torchvision.transforms as transforms
 from torchmetrics import Accuracy
 import numpy as np
 from torch.nn.utils.convert_parameters import parameters_to_vector, vector_to_parameters
-from optforget import FineTuneForgetProblem, StochasticMSASolver, MSAOptimizer
+from optforget import FineTuneForgetProblem, StochasticMSASolver, MSAOptimizer, LeNet5
 
 
 class CIFAR10DataModule(pl.LightningDataModule):
@@ -87,16 +87,18 @@ class LitResNet(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
 
-        self.model = timm.create_model('resnet18',
-                                       pretrained=False,
-                                       num_classes=num_classes)
-        self.model.conv1 = nn.Conv2d(3,
-                                     64,
-                                     kernel_size=3,
-                                     stride=1,
-                                     padding=1,
-                                     bias=False)
-        self.model.maxpool = nn.Identity()
+        # self.model = timm.create_model('lenet5',
+        #                                pretrained=False,
+        #                                num_classes=num_classes)
+        # self.model.conv1 = nn.Conv2d(3,
+        #                              64,
+        #                              kernel_size=3,
+        #                              stride=1,
+        #                              padding=1,
+        #                              bias=False)
+        # self.model.maxpool = nn.Identity()
+        self.model = LeNet5(num_classes=num_classes)
+
         self.criterion = nn.CrossEntropyLoss()
         self.accuracy_A = Accuracy(task='multiclass', num_classes=num_classes)
         self.accuracy_B = Accuracy(task='multiclass', num_classes=num_classes)
