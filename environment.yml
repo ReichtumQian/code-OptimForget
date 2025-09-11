@@ -33,3 +33,4 @@ dependencies:
     - pandas
     - seaborn
     - matplotlib
+    - pytest

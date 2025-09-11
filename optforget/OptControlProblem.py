@@ -208,13 +208,35 @@ class FineTuneForgetProblem(PMPProblem):
                          self._terminal_cost, x_anchor, t0, tf, control_dim)
 
     def set_current_batch(self, batch: tuple):
+        """
+        Sets the current mini-batch of data to be used for loss and gradient calculations.
+        This is essential for the stochastic nature of the problem.
+        
+        Args:
+            batch (tuple): A tuple typically containing (inputs, labels).
+        """
         self._current_batch = batch
 
     def _compute_loss_l2(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Computes the fine-tuning loss (L2) for a given flattened parameter vector 'x'.
+        It reconstructs the model's state_dict from 'x' and performs a forward pass.
+
+        Args:
+            x (torch.Tensor): A batch of flattened parameter vectors.
+                              Shape: `(N, state_dim)`, where N is the batch size.
+
+        Returns:
+            torch.Tensor: The computed scalar loss value for the current mini-batch.
+                          Shape: `()` (a scalar tensor).
+        """
         if self._current_batch is None:
             raise ValueError(
                 "Current batch has not been set. Call set_current_batch() first."
             )
+        # Note: This implementation assumes a batch size of 1 for the parameter vector 'x',
+        # as the optimizer typically handles one trajectory at a time.
+        # x.squeeze(0) converts shape (1, state_dim) -> (state_dim,).
         params_list = x.squeeze(0).split(self.param_numels)
         param_dict = {
             name: p.view(shape)
@@ -229,6 +251,20 @@ class FineTuneForgetProblem(PMPProblem):
 
     def _f_dynamics(self, t: float, x: torch.Tensor,
                     u: torch.Tensor) -> torch.Tensor:
+        """
+        Computes the state dynamics: dx/dt = -eta * grad(L2(x)) + u(t).
+        
+        Args:
+            t (float): Current time.
+            x (torch.Tensor): Current state (flattened model parameters).
+                              Shape: `(N, state_dim)`.
+            u (torch.Tensor): Current control input.
+                              Shape: `(N, control_dim)`.
+
+        Returns:
+            torch.Tensor: The time derivative of the state, dx/dt.
+                          Shape: `(N, state_dim)`.
+        """
         x_requires_grad = x.detach().clone().requires_grad_(True)
         loss_l2 = self._compute_loss_l2(x_requires_grad)
         grad_l2 = torch.autograd.grad(loss_l2,
@@ -238,9 +274,33 @@ class FineTuneForgetProblem(PMPProblem):
 
     def _running_cost(self, t: float, x: torch.Tensor,
                       u: torch.Tensor) -> torch.Tensor:
+        """
+        Computes the running cost: L = (lambda_reg / 2) * ||u||^2.
+
+        Args:
+            t (float): Current time.
+            x (torch.Tensor): Current state. Shape: `(N, state_dim)`.
+            u (torch.Tensor): Current control. Shape: `(N, control_dim)`.
+
+        Returns:
+            torch.Tensor: The scalar running cost for each item in the batch.
+                          Shape: `(N,)`.
+        """
         return self.lambda_reg / 2.0 * torch.sum(u * u, dim=1)
 
     def _terminal_cost(self, t: float, x: torch.Tensor) -> torch.Tensor:
+        """
+        Computes the terminal cost: phi = c1 * (L1 loss) + c2 * (L2 loss).
+        L1 loss = 0.5 * ||x - x_anchor||^2 (regularization towards initial parameters).
+        L2 loss = Fine-tuning loss on the current batch.
+
+        Args:
+            t (float): Final time.
+            x (torch.Tensor): Final state. Shape: `(N, state_dim)`.
+
+        Returns:
+            torch.Tensor: The total scalar terminal cost. Shape: `()` (scalar).
+        """
         loss_l2 = self._compute_loss_l2(x)
         loss_l1 = 0.5 * torch.sum((x - self.x_anchor) * (x - self.x_anchor))
 
@@ -249,7 +309,16 @@ class FineTuneForgetProblem(PMPProblem):
     def compute_terminal_costate(self, t_f: float,
                                  x_f: torch.Tensor) -> torch.Tensor:
         """
-        p(t_f) = d(phi)/dx |_{t_f, x_f}
+        Computes the terminal condition for the costate vector: p(tf) = d(phi)/dx.
+        This is the gradient of the terminal cost with respect to the final state.
+
+        Args:
+            t_f (float): Final time.
+            x_f (torch.Tensor): Final state. Shape: `(N, state_dim)`.
+
+        Returns:
+            torch.Tensor: The terminal costate vector, p(tf).
+                          Shape: `(N, state_dim)`.
         """
         x_f_with_grad = x_f.detach().clone().requires_grad_(True)
         term_cost = self.terminal_cost(t_f, x_f_with_grad)
@@ -260,15 +329,21 @@ class FineTuneForgetProblem(PMPProblem):
                                  p: torch.Tensor,
                                  u: torch.Tensor) -> torch.Tensor:
         """
-        dp/dt = -dH/dx
-        H = L + p^T*f = lambda/2 * ||u||^2 + p^T*u
-        Since H does not depend on x, dH/dx = 0.
-        Therefore, dp/dt = 0.
+        Computes the costate dynamics: dp/dt = -dH/dx.
+        For our dynamics f = -eta*grad(L2) + u, the Hamiltonian is:
+        H = L + p^T*f = (lambda/2)*||u||^2 + p^T*(-eta*grad(L2) + u).
+        The derivative -dH/dx simplifies to eta * [Hessian(L2) * p].
+        This is computed efficiently as a Hessian-Vector Product (HVP).
 
-        If the dynamics were more complex, e.g., f(x, u), we would need to compute
-        dH/dx = dL/dx + (df/dx)^T * p.
-        The (df/dx)^T*p part is a Hessian-Vector Product (HVP).
-        For this problem, the dynamics are simple.
+        Args:
+            t (float): Current time.
+            x (torch.Tensor): Current state. Shape: `(N, state_dim)`.
+            p (torch.Tensor): Current costate. Shape: `(N, state_dim)`.
+            u (torch.Tensor): Current control. Shape: `(N, control_dim)`.
+
+        Returns:
+            torch.Tensor: The time derivative of the costate, dp/dt.
+                          Shape: `(N, state_dim)`.
         """
         x_requires_grad = x.detach().clone().requires_grad_(True)
 
@@ -287,8 +362,17 @@ class FineTuneForgetProblem(PMPProblem):
     def compute_optimal_control(self, t: float, x: torch.Tensor,
                                 p: torch.Tensor) -> torch.Tensor:
         """
-        u* = argmin_u H(u) = argmin_u { lambda/2 * ||u||^2 + p^T*u }
-        Taking derivative w.r.t u and setting to 0:
-        lambda * u + p = 0  =>  u* = -p / lambda
+        Computes the optimal control u*(t) that minimizes the Hamiltonian.
+        For H = (lambda/2)*||u||^2 + p^T*u + ..., minimizing w.r.t. u gives:
+        dH/du = lambda*u + p = 0  =>  u* = -p / lambda.
+
+        Args:
+            t (float): Current time.
+            x (torch.Tensor): Current state. Shape: `(N, state_dim)`.
+            p (torch.Tensor): Current costate. Shape: `(N, state_dim)`.
+
+        Returns:
+            torch.Tensor: The optimal control vector u*.
+                          Shape: `(N, control_dim)`.
         """
         return -p / self.lambda_reg
