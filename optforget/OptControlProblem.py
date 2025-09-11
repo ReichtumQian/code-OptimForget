@@ -190,6 +190,7 @@ class FineTuneForgetProblem(PMPProblem):
         self.c1, self.c2 = c_costs
         self.eta = eta
         self.ft_dataloader = ft_dataloader
+        self.data_iter = iter(self.ft_dataloader)
         self.model = model
         self.loss_fn = loss_function
         self.x_anchor = x_anchor.detach().clone()
@@ -207,6 +208,14 @@ class FineTuneForgetProblem(PMPProblem):
         super().__init__(self._f_dynamics, self._running_cost,
                          self._terminal_cost, x_anchor, t0, tf, control_dim)
 
+    def _get_next_batch(self) -> tuple:
+        try:
+            batch = next(self.data_iter)
+        except StopIteration:
+            self.data_iter = iter(self.ft_dataloader)
+            batch = next(self.data_iter)
+        return [t.to(self.device) for t in batch]
+    
     def set_current_batch(self, batch: tuple):
         """
         Sets the current mini-batch of data to be used for loss and gradient calculations.

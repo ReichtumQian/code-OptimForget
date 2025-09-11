@@ -173,17 +173,8 @@ class StochasticMSASolver(MSASolver):
 
         super().__init__(num_steps, num_iterations, problem)
 
-        self.dataloader = problem.ft_dataloader
-        self.data_iter = iter(self.dataloader)
         self.device = problem.x0.device
 
-    def _get_next_batch(self) -> tuple:
-        try:
-            batch = next(self.data_iter)
-        except StopIteration:
-            self.data_iter = iter(self.dataloader)
-            batch = next(self.data_iter)
-        return [t.to(self.device) for t in batch]
 
     def _forward_pass(self, u_traj: torch.Tensor) -> torch.Tensor:
         x_traj = torch.zeros_like(
@@ -193,7 +184,7 @@ class StochasticMSASolver(MSASolver):
         for k in range(self.num_steps - 1):
             t_k, x_k, u_k = self.t_arr[k], x_traj[k], u_traj[k]
 
-            batch_k = self._get_next_batch()
+            batch_k = self.problem._get_next_batch()
             self.problem.set_current_batch(batch_k)
 
             dx_dt = self.problem.f(t_k.item(), x_k, u_k)
@@ -205,7 +196,7 @@ class StochasticMSASolver(MSASolver):
                        u_traj: torch.Tensor) -> torch.Tensor:
         p_traj = torch.zeros_like(x_traj)
 
-        terminal_batch = self._get_next_batch()
+        terminal_batch = self.problem._get_next_batch()
         self.problem.set_current_batch(terminal_batch)
         p_traj[-1] = self.problem.compute_terminal_costate(
             self.problem.tf, x_traj[-1])
@@ -214,7 +205,7 @@ class StochasticMSASolver(MSASolver):
             t_k, x_k, p_k_plus_1, u_k = self.t_arr[k], x_traj[k], p_traj[
                 k + 1], u_traj[k]
 
-            batch_k = self._get_next_batch()
+            batch_k = self.problem._get_next_batch()
             self.problem.set_current_batch(batch_k)
 
             dp_dt = self.problem.compute_costate_dynamics(
