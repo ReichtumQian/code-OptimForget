@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, call
 
 # Adjust the import path as necessary
 from optforget import (
+    PMPProblem,
     MSASolver,
     StochasticMSASolver,
     FineTuneForgetProblem
@@ -105,6 +106,120 @@ def test_msa_solver_update_control(mock_pmp_problem):
     assert torch.allclose(u_new_traj, expected_u_new_traj)
     # Verify that the mock was called for each step from k=0 to K-2
     assert mock_pmp_problem.compute_optimal_control.call_count == num_steps - 1
+
+class SimpleLQRProblem(PMPProblem):
+    """
+    A simple 1D LQR problem adapted to the PMPProblem interface.
+
+    This class defines the LQR problem by:
+    1. Providing the specific dynamics and cost functions to the parent constructor.
+    2. Implementing the required methods for PMP (costate dynamics, etc.).
+
+    - Dynamics: f(t, x, u) = u
+    - Running Cost: L(t, x, u) = 0.5 * lambda * ||u||^2
+    - Terminal Cost: phi(t, x) = 0.5 * ||x||^2
+    """
+
+    def __init__(self, lambda_reg: float, x0: torch.Tensor, t0: float, tf: float):
+        """
+        Initializes the LQR Problem.
+
+        Args:
+            lambda_reg (float): The regularization coefficient for the control cost.
+            x0 (torch.Tensor): The initial state. Shape (state_dim,) or (N, state_dim).
+            t0 (float): The initial time.
+            tf (float): The final time.
+        """
+        self.lambda_reg = lambda_reg
+        state_dim = x0.shape[-1]
+        control_dim = state_dim  # For this problem, dimensions are the same
+
+        # Define the functions for the parent class
+        def f_dynamics(t, x, u):
+            """State dynamics: dx/dt = u"""
+            return u
+
+        def running_cost(t, x, u):
+            """Running cost: L = (lambda / 2) * ||u||^2"""
+            # Sum over the last dimension to handle batches correctly
+            return (self.lambda_reg / 2.0) * torch.sum(u * u, dim=-1)
+
+        def terminal_cost(t, x):
+            """Terminal cost: phi = 0.5 * ||x||^2"""
+            return 0.5 * torch.sum(x * x, dim=-1)
+
+        # Initialize the parent PMPProblem with these specific functions
+        super().__init__(
+            f=f_dynamics,
+            running_cost=running_cost,
+            terminal_cost=terminal_cost,
+            x0=x0,
+            t0=t0,
+            tf=tf,
+            control_dim=control_dim
+        )
+
+    def compute_terminal_costate(self, t_f: float, x_f: torch.Tensor) -> torch.Tensor:
+        """
+        Computes p(tf) = d(phi)/dx.
+        For phi = 0.5 * ||x||^2, the gradient is just x.
+        """
+        return x_f
+
+    def compute_costate_dynamics(self, t: float, x: torch.Tensor, p: torch.Tensor, u: torch.Tensor) -> torch.Tensor:
+        """
+        Computes dp/dt = -dH/dx.
+        H = L + p^T*f = 0.5*lambda*||u||^2 + p^T*u.
+        Since H does not depend on x, dH/dx = 0.
+        """
+        return torch.zeros_like(x)
+
+    def compute_optimal_control(self, t: float, x: torch.Tensor, p: torch.Tensor) -> torch.Tensor:
+        """
+        Computes u* = argmin_u H(u).
+        From dH/du = lambda*u + p = 0, we get u* = -p / lambda.
+        """
+        return -p / self.lambda_reg
+
+
+def test_solver_solves_simple_lqr():
+    """
+    Tests if the MSASolver can find the known analytical solution
+    for the refactored SimpleLQRProblem.
+    """
+    # define the problem
+    x0_val = 10.0
+    lambda_reg = 1.0
+    t0 = 0.0
+    tf = 1.0
+    x0_tensor = torch.tensor([x0_val], dtype=torch.float32)
+    problem = SimpleLQRProblem(lambda_reg, x0_tensor, t0, tf)
+    # define the solver
+    num_steps = 50
+    num_iterations = 20
+    solver = MSASolver(num_steps=num_steps, num_iterations=num_iterations, problem=problem)
+    # run the solver
+    u_init = torch.zeros(num_steps - 1, 1, problem.control_dim, dtype=torch.float32)
+    u_optimal, x_optimal, costs = solver.solve(u_init)
+    t_arr = solver.t_arr
+    # Analytical state trajectory: x(t) = x0 * (lambda + tf - t) / (lambda + tf - t0)
+    denominator = lambda_reg + tf - t0
+    x_analytical = x0_val * (lambda_reg + tf - t_arr) / denominator
+    x_analytical = x_analytical.view(num_steps, 1, 1) # Reshape for comparison
+
+    # Analytical control trajectory: u(t) = -x0 / (lambda + tf - t0) (it's a constant)
+    u_analytical_val = -x0_val / denominator
+    u_analytical = torch.full_like(u_optimal, u_analytical_val)
+
+    # 2. Check for convergence and correctness
+    # The cost should generally decrease over iterations
+    # (Note: MSA is not guaranteed to be monotonic, but for simple problems it often is)
+    assert costs[-1] < costs[0], "Cost should decrease after iterations."
+    
+    # 3. The final numerical solution should be very close to the analytical one
+    # A tolerance (atol) is used for floating-point comparisons.
+    assert torch.allclose(x_optimal, x_analytical, atol=1e-3), "Optimal state trajectory does not match analytical solution."
+    assert torch.allclose(u_optimal, u_analytical, atol=1e-3), "Optimal control trajectory does not match analytical solution."
 
 
 # ==================================================================

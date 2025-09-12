@@ -13,7 +13,7 @@ class MSASolver:
     """
 
     def __init__(self, num_steps: int, num_iterations: int,
-                 problem: PMPProblem):
+                 problem: PMPProblem, alpha: float = 0.2):
         """
         Initializes the MSA Solver.
 
@@ -30,6 +30,7 @@ class MSASolver:
                                     num_steps,
                                     device=problem.x0.device)
         self.dt = (problem.tf - problem.t0) / (num_steps - 1)
+        self.alpha = alpha
 
     def _forward_pass(self, u_traj: torch.Tensor) -> torch.Tensor:
         """
@@ -148,7 +149,7 @@ class MSASolver:
 
             # Simple update (no line search)
             # A learning rate could be added here: u_traj = u_traj + alpha * (u_traj_new - u_traj)
-            u_traj = u_traj_new
+            u_traj = (1 - self.alpha) * u_traj + self.alpha * u_traj_new
 
             # (Optional) Evaluate and store cost
             cost = self.problem.evaluate_cost(self.t_arr, x_traj, u_traj)
