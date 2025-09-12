@@ -161,61 +161,6 @@ class MSASolver:
 
         return u_traj, x_optimal, costs
 
-
-class StochasticMSASolver(MSASolver):
-
-    def __init__(self, num_steps: int, num_iterations: int,
-                 problem: FineTuneForgetProblem):
-        if not hasattr(problem,
-                       'ft_dataloader') or problem.ft_dataloader is None:
-            raise TypeError(
-                "The provided problem for StochasticMSASolver must have an 'ft_dataloader' attribute."
-            )
-
-        super().__init__(num_steps, num_iterations, problem)
-
-        self.device = problem.x0.device
-
-
-    def _forward_pass(self, u_traj: torch.Tensor) -> torch.Tensor:
-        x_traj = torch.zeros_like(
-            self.problem.x0.expand(self.num_steps, -1, -1))
-        x_traj[0] = self.problem.x0
-
-        for k in range(self.num_steps - 1):
-            t_k, x_k, u_k = self.t_arr[k], x_traj[k], u_traj[k]
-
-            batch_k = self.problem._get_next_batch()
-            self.problem.set_current_batch(batch_k)
-
-            dx_dt = self.problem.f(t_k.item(), x_k, u_k)
-            x_traj[k + 1] = x_k + self.dt * dx_dt
-
-        return x_traj
-
-    def _backward_pass(self, x_traj: torch.Tensor,
-                       u_traj: torch.Tensor) -> torch.Tensor:
-        p_traj = torch.zeros_like(x_traj)
-
-        terminal_batch = self.problem._get_next_batch()
-        self.problem.set_current_batch(terminal_batch)
-        p_traj[-1] = self.problem.compute_terminal_costate(
-            self.problem.tf, x_traj[-1])
-
-        for k in range(self.num_steps - 2, -1, -1):
-            t_k, x_k, p_k_plus_1, u_k = self.t_arr[k], x_traj[k], p_traj[
-                k + 1], u_traj[k]
-
-            batch_k = self.problem._get_next_batch()
-            self.problem.set_current_batch(batch_k)
-
-            dp_dt = self.problem.compute_costate_dynamics(
-                t_k.item(), x_k, p_k_plus_1, u_k)
-            p_traj[k] = p_k_plus_1 - self.dt * dp_dt
-
-        return p_traj
-
-
 class MSAOptimizer(Optimizer):
     """
     Implements MSA as a PyTorch Optimizer.

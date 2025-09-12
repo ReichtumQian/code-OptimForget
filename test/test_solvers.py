@@ -10,10 +10,6 @@ from optforget import (
     FineTuneForgetProblem
 )
 
-# ==================================================================
-# 1. Tests for MSASolver (Deterministic Solver)
-# ==================================================================
-
 @pytest.fixture
 def mock_pmp_problem():
     """
@@ -221,65 +217,3 @@ def test_solver_solves_simple_lqr():
     assert torch.allclose(x_optimal, x_analytical, atol=1e-3), "Optimal state trajectory does not match analytical solution."
     assert torch.allclose(u_optimal, u_analytical, atol=1e-3), "Optimal control trajectory does not match analytical solution."
 
-
-# ==================================================================
-# 2. Tests for StochasticMSASolver
-# ==================================================================
-
-def test_stochastic_solver_get_next_batch_resets(fine_tune_problem):
-    """
-    Tests that the data iterator resets after being exhausted.
-    """
-    # The dataloader in the fixture has 16 samples with batch_size=4, so 4 batches.
-    solver = StochasticMSASolver(num_steps=10, num_iterations=1, problem=fine_tune_problem)
-    
-    # Exhaust the iterator
-    for _ in range(4):
-        solver.problem._get_next_batch()
-    
-    # The 5th call should reset the iterator and return the first batch again
-    batch_1_again = solver.problem._get_next_batch()
-    
-    first_batch_from_new_iter = next(iter(fine_tune_problem.ft_dataloader))
-
-    # Check that the tensors are the same
-    assert torch.equal(batch_1_again[0], first_batch_from_new_iter[0].to(solver.device))
-    assert torch.equal(batch_1_again[1], first_batch_from_new_iter[1].to(solver.device))
-
-
-def test_stochastic_solver_forward_pass_sets_batch(fine_tune_problem):
-    """
-    Tests that _forward_pass calls problem.set_current_batch at each step.
-    We can "spy" on the method by mocking it.
-    """
-    original_method = fine_tune_problem.set_current_batch
-    # Spy on the set_current_batch method
-    fine_tune_problem.set_current_batch = MagicMock(wraps=original_method)
-
-    num_steps = 5
-    solver = StochasticMSASolver(num_steps=num_steps, num_iterations=1, problem=fine_tune_problem)
-    u_traj = torch.zeros(num_steps - 1, 1, fine_tune_problem.state_dim)
-
-    solver._forward_pass(u_traj)
-    
-    # It should be called K-1 times in the forward pass loop
-    assert fine_tune_problem.set_current_batch.call_count == num_steps - 1
-
-
-def test_stochastic_solver_backward_pass_sets_batch(fine_tune_problem):
-    """
-    Tests that _backward_pass calls problem.set_current_batch at each step.
-    """
-    original_method = fine_tune_problem.set_current_batch
-    # Spy on the set_current_batch method
-    fine_tune_problem.set_current_batch = MagicMock(wraps=original_method)
-    
-    num_steps = 5
-    solver = StochasticMSASolver(num_steps=num_steps, num_iterations=1, problem=fine_tune_problem)
-    x_traj = torch.zeros(num_steps, 1, fine_tune_problem.state_dim)
-    u_traj = torch.zeros(num_steps - 1, 1, fine_tune_problem.state_dim)
-
-    solver._backward_pass(x_traj, u_traj)
-    
-    # It's called once for the terminal condition, then K-1 times in the loop.
-    assert fine_tune_problem.set_current_batch.call_count == num_steps
