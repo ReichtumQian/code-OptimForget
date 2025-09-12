@@ -12,7 +12,7 @@ pl.seed_everything(42, workers=True)
 PRETRAINED_CKPT_PATH = 'checkpoints/pretrained-best.ckpt'
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 print("Setting up data modules...")
-data_module = CIFAR10DataModule(batch_size=256)
+data_module = CIFAR10DataModule(batch_size=32)
 data_module.setup()
 val_loaders_A_and_B = data_module.val_dataloader()
 print("✅ Data modules are ready.")
@@ -61,7 +61,7 @@ model.hparams.lambda_reg = 0.01
 model.hparams.c1 = 1.0
 model.hparams.c2 = 1.0
 model.hparams.eta = 0.01
-model.hparams.msa_num_steps = 5
+model.hparams.msa_num_steps = 50
 model.hparams.t0 = 0.0
 model.hparams.tf = 1.0
 model.flat_params = torch.nn.Parameter(

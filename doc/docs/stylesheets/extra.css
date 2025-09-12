@@ -1,0 +1,14 @@
+@font-face {
+  font-family: "Ysabeau";
+  src: url(Ysabeau-Regular.ttf);
+}
+
+:root{
+  --md-text-font: "Ysabeau"
+}
+
+img {
+  display: block;
+  margin-left: auto;
+  margin-right: auto;
+}
